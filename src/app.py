@@ -5,54 +5,82 @@ sys.path.insert(0, os.path.dirname(__file__))
 import traceback
 import gradio as gr
 from PIL import Image
-from predict import load_models, predict
+from predict_ensemble import load_ensemble_models, predict_ensemble
+
 
 try:
-    detector, classifier, device = load_models()
-    print("Models loaded!")
-except Exception as e:
+    ens_detector, side_clf, bottom_clf, top_clf, ens_device = load_ensemble_models()
+    print("Ensemble models loaded!")
+except Exception:
     traceback.print_exc()
     raise
 
-def run(image):
-    if image is None:
-        return None, "Please upload an image."
-    img = Image.fromarray(image)
-    result = predict(img, detector, classifier, device)
-    if result["status"] == "no_cylinder":
-        return None, "❌ No LPG cylinder detected in image."
-    if result["status"] == "multi_cylinder":
-        return None, "⚠️ Multiple cylinders detected.\n\nPlease present ONE cylinder.\n\nClassification skipped."
-    prob_breakdown = "\n".join([
-        f"  {brand}: {conf}%"
-        for brand, conf in result["probabilities"].items()
-    ])
-    result_text = f"""✅ Single cylinder detected
-🏷️  Brand: {result['brand']}, Confidence: {result['confidence']}%
+def run(side_image, top_image):
+    if side_image is None:
+        return None, None, None, None, "Side camera image is required."
 
-All probabilities:
-{prob_breakdown}"""
-    return result["crop"], result_text
+    side_img = Image.fromarray(side_image)
+    top_img  = Image.fromarray(top_image) if top_image is not None else None
+
+    result = predict_ensemble(
+        side_img, ens_detector, side_clf, bottom_clf, top_clf, ens_device,
+        top_image=top_img
+    )
+
+    if result["status"] == "no_cylinder":
+        return None, None, None, None, "No LPG cylinder detected."
+
+    if result["status"] == "multi_cylinder":
+        return None, None, None, None, "Multiple cylinders detected. Please present one cylinder at a time."
+
+    # Resize crops to avoid content length issues
+    full_crop   = result["full_crop"]
+    side_crop   = result["side_crop"]
+    bottom_crop = result["bottom_crop"]
+    top_crop    = result["top_crop"]
+
+    full_crop.thumbnail((512, 512))
+    side_crop.thumbnail((512, 512))
+    bottom_crop.thumbnail((512, 512))
+    if top_crop is not None:
+        top_crop.thumbnail((512, 512))
+
+    top_pred_text = f"{result['top_pred']} ({result['top_conf']}%)" if result["top_pred"] is not None else "N/A"
+
+    result_text = f"""═══════════════════════════
+Brand: {result['brand'].title()}
+Confidence: {result['confidence']}%
+═══════════════════════════
+Side view:   {result['side_pred']} ({result['side_conf']}%)
+Bottom ring: {result['bottom_pred']} ({result['bottom_conf']}%)
+Top view:    {top_pred_text}"""
+
+    return full_crop, side_crop, bottom_crop, top_crop, result_text
 
 demo = gr.Interface(
     fn=run,
-    inputs=gr.Image(label="📷 Upload or drag & drop a cylinder image here, then click Submit"),
-    outputs=[
-        gr.Image(label="🔍 Cropped cylinder sent to classifier"),
-        gr.Textbox(label="📊 Result & Probability Breakdown", lines=12, max_lines=12),
+    inputs=[
+        gr.Image(sources=["webcam"],
+                  streaming=True,
+                  label="Side Camera (required)"),
+        gr.Image(sources=["webcam", "upload"], 
+                 streaming=False, 
+                 label="Top Camera (leave empty if unavailable, streaming set to False now)"),
     ],
-    title="🛢️ lpg_identificationv1",
-    description="""
-## How to use
-1. **Upload** a photo of an LPG cylinder using the image box on the left.
-2. **Click Submit** — the detector will run automatically.
-3. **View results** on the right — cropped cylinder region + brand, confidence, and full probability breakdown.
-
----
-**Pipeline:** YOLOv11n (detection) → EfficientNetB0 (classification)
-**Brands:** Indane | Bharat Gas | HP Gas | Unknown
-    """,
+    outputs=[
+        gr.Image(label="Detected cylinder"),
+        gr.Image(label="Side region"),
+        gr.Image(label="Bottom ring region"),
+        gr.Image(label="Top view crop"),
+        gr.Textbox(label="Result", lines=10, max_lines=10),
+    ],
+    title="LPG Cylinder Identification — Ensemble v1",
+    description="Side camera required. Top camera optional — ensemble automatically adjusts weights.",
+    theme="soft",
+    flagging_mode="manual",
+    flagging_options=["Wrong brand", "Not detected", "Multiple cylinders", "Other"],
+    flagging_dir="flagged_predictions"
 )
 
 if __name__ == "__main__":
-    demo.launch(theme="soft", share=True)
+    demo.launch(server_name="0.0.0.0", share=False)

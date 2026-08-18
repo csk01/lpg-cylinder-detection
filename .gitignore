@@ -1,10 +1,23 @@
+# Data
+datasets/*.zip
+flagged_predictions/
+
+# Temp
+temp.jpg
+*.tmp
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
+*.pyc
+*.pyo
+.env
+venv/
 *.py[codz]
 *$py.class
 
 # C extensions
 *.so
+
 
 # Distribution / packaging
 .Python
@@ -133,6 +146,7 @@ celerybeat.pid
 
 # SageMath parsed files
 *.sage.py
+
 
 # Environments
 .env
